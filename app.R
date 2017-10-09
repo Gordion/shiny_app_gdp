@@ -1,16 +1,12 @@
 library(shiny)
 library(SPARQL)
-#library(ggplot2)
-#library(stringi)
-library(RColorBrewer)
 library(shinydashboard)
 library(dplyr)
 library(dygraphs)
-library(zoo)
-library(xts)
 library(tidyr)
+library(xts)
 
-#http://statistics.gov.scot/data/gross-domestic-product-quarterly-output-by-industry 
+# Load Open Data Platform data into memory
 
 endpoint <- 'http://statistics.gov.scot/sparql'
 query <-'PREFIX qb: <http://purl.org/linked-data/cube#>
@@ -27,22 +23,27 @@ query <-'PREFIX qb: <http://purl.org/linked-data/cube#>
   ?data <http://statistics.gov.scot/def/measure-properties/index> ?value. #exposes count data as ?value
   }'
 
-qd <- SPARQL(endpoint,query)$results %>%
+query_data <- SPARQL(endpoint,query)$results %>%
   filter(nchar(date) == 7)
 
 
-latest_data<- qd %>%
+latest_data<- query_data %>%
   select(date) %>%
   filter(nchar(date) == 7) %>%
   arrange(date) %>%
   summarise(value=last(date))
 
-#getPalette <-colorRampPalette(brewer.pal(12, "Set3"))
+earliest_data<- query_data %>%
+  select(date) %>%
+  filter(nchar(date) == 7) %>%
+  arrange(date) %>%
+  summarise(value=first(date))
 
-#cols <- colorRampPalette(brewer.pal(8, "Dark2"))
-#myPal <- cols(length(unique(qd$sector)))
+current_year <- as.numeric(substr(latest_data,1,4))
+first_year <- as.numeric(substr(earliest_data,1,4))
 
-# Define UI for application
+# Create shiny ui
+
 ui <- dashboardPage(
   dashboardHeader(
     title = "GDP Quarterly Change"
@@ -60,10 +61,6 @@ ui <- dashboardPage(
                                       "Production (Section B-E)"
                          )
       ),
-      
-      #checkboxInput("Total Gross Value Added (GVA) (Section A-T)", "Total Gross Value Added", TRUE),
-      #checkboxInput("Agriculture, Forestry and Fishing (Section A)", "Agriculture, Forestry and Fishing", TRUE),
-      #checkboxInput("Production (Section B-E)", "Production", TRUE),
       menuItem("Production subsectors", startExpanded = FALSE,
                checkboxGroupInput("production_select", 
                                   label=NULL,
@@ -94,17 +91,25 @@ ui <- dashboardPage(
                )
       )
     ),
-    sliderInput("slider2", label = "Year range", min = 2000, 
-                max = 2017, value = c(2013, 2017),sep="")
+    sliderInput("slider2", label = "Year range", min = first_year, 
+                max = current_year, value = c(current_year-4, current_year),sep="")
   ),
-      # Show a plot of the line graph
+  
+  # Show the line graph created by server
+  
   dashboardBody(box(
     title = paste("Scotland's Gross Domestic Product, latest revision:", latest_data),
-        dygraphOutput("linePlot")
+        dygraphOutput("linePlot"),
+    tagList("For further information see ", 
+            a("Scotland's GDP report",
+            href = "http://www.gov.scot/Topics/Statistics/Browse/Economy/GDP"))
     , width = 9
       ),
     box(title = "Legend", textOutput("legend_div"),width=3)
    ),
+  
+  # Modify styles
+  
   tags$head(tags$style(HTML('
         .skin-blue .main-sidebar {
                               background-color: #420B4E;
@@ -125,9 +130,10 @@ ui <- dashboardPage(
         .skin-blue .main-sidebar .sidebar .sidebar-menu a{
                             background-color: #81358D;
                             color: #EEEEEE;
-                            }
-')))
-
+                            }'
+                            )
+                       )
+            )
 
 )
 
@@ -140,58 +146,31 @@ server <- shinyServer(function(input, output) {
      sector_select <- c(input$main_1,input$main_2,
                         input$production_select,
                         input$service_select)
+     
+     req(sector_select)
+     req(year_value)
 
-     df <- qd %>%
+     graph_data <- query_data %>%
        filter(nchar(date) == 7) %>%
        filter(substr(date,1,4) >= year_value[1] & substr(date,1,4) <= year_value[2]) %>%
        filter(sector %in% sector_select) %>%
-       spread(sector,value) 
-     
-     df$date<-as.yearqtr(df$date,format = "%Y-Q%q")
-     
-     df<-xts(df,order.by=df$date)
-     
-     df$date<-NULL
-     
-     #df$date <- NULL 
-      # draw the histogram with the specified number of bins
-     dygraph(df) %>%
-       dyOptions(strokeWidth = 3) %>%
-       #dyHighlight(highlightSeriesOpts = list(strokeWidth = 3)) %>%
-       dyLegend(labelsSeparateLines = TRUE,labelsDiv = "legend_div") 
-     #%>% 
-      # dyLegend()
-     
-      # ggplot(df,aes(x=date,y=value,group=sector, color = sector)) +
-      #   geom_line(size=2) +
-      #   theme_bw() + 
-      #   theme(axis.title.x = element_text(face="bold",
-      #                                     #colour="#990000",
-      #                                     size=20),
-      #         axis.title.y = element_text(face="bold",
-      #                                     #colour="#990000",
-      #                                     size=20),
-      #         axis.text.x  = element_text(angle=90,
-      #                                     vjust=.5,
-      #                                     size=15),
-      #         axis.text.y  = element_text(size=15)
-      #         
-      #         #legend.direction = "vertical"
-      #         )  +
-      #   theme(legend.text=element_text(size=14)) +
-      #   ggtitle(paste("GDP by industry sector")) +
-      #   theme(plot.title = element_text(face="bold", size=20, hjust=0),
-      #         legend.title=element_text(size=15)) + 
-      #   labs(x="Date",y="Index (2013 = 100)",color = "Industry Sector") +
-      #   scale_fill_manual(values = myPal)
-        
-      
-      #plot_ly(df,x=~year,y=~count,type="line")
+       spread(sector,value)
 
-   }
-   #, height = 500, width = 1000
-   
-   )
+     graph_data$date<-as.yearqtr(graph_data$date,format = "%Y-Q%q")
+     
+     #Create time series to automate x-axis labels
+     graph_data<-xts(graph_data,order.by=graph_data$date)
+     
+     graph_data$date<-NULL
+     
+    # Create linegraph out of dataframe
+     dygraph(graph_data) %>%
+       dyOptions(strokeWidth = 3) %>%
+       dyAxis("y", label = "Index (2014 = 100)") %>%
+       dyLegend(labelsSeparateLines = TRUE,
+                labelsDiv = "legend_div") 
+ 
+   })
    
 })
 
